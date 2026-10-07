@@ -1,0 +1,16 @@
+[build]
+  base = "frontend"
+  command = "npm ci && npm run build"
+  publish = "dist"
+
+# Replace this URL with your actual Railway backend URL before deploying.
+[[redirects]]
+  from = "/api/*"
+  to = "https://YOUR-FITLOG-BACKEND.up.railway.app/api/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
