@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 const TrendChart = lazy(() => import("./TrendChart"));
 import { api, scaled, localDate } from "./api";
+import { FoodForm } from "./FoodForm";
 import "./style.css";
 import { AuthGate, ProfileFields, profileData, User } from "./Auth";
 
@@ -1070,9 +1071,9 @@ function App({
                 <p>{user.email}</p>
                 <ProfileFields user={user} />
                 <p>
-                  Daily logged weight drives expenditure. Changing profile weight
-                  updates today’s logged weight. Keep your age up to date. Past
-                  calculation inputs are preserved.
+                  Daily logged weight drives expenditure. Changing profile
+                  weight updates today’s logged weight. Keep your age up to
+                  date. Past calculation inputs are preserved.
                 </p>
                 <button className="button dark" disabled={busy}>
                   Save profile
@@ -1182,7 +1183,7 @@ function App({
                     }}
                   >
                     <Plus size={16} />
-                    Custom food
+                    New food
                   </button>
                 </div>
                 {[...foods]
@@ -1365,6 +1366,12 @@ function App({
                         10}{" "}
                       g protein
                     </div>
+                    <p className="nutrition-hint">
+                      {selected.carbsG != null &&
+                        `${Math.round(((selected.carbsG * quantity) / selected.baseQuantity) * 10) / 10} g carbs · `}
+                      {selected.fatG != null &&
+                        `${Math.round(((selected.fatG * quantity) / selected.baseQuantity) * 10) / 10} g fat`}
+                    </p>
                     <button
                       className="button dark full"
                       disabled={busy || quantity <= 0}
@@ -1399,7 +1406,7 @@ function App({
                           setModal("custom");
                         }}
                       >
-                        Add custom
+                        New food
                       </button>
                     </div>
                     <input
@@ -1454,16 +1461,15 @@ function App({
                 food={modal === "editFood" ? selected : null}
                 busy={busy}
                 save={async (data) => {
-                  if (
-                    await mutate(
-                      selected && modal === "editFood"
-                        ? `/foods/${selected.id}`
-                        : "/foods",
-                      modal === "editFood" ? "PATCH" : "POST",
-                      data,
-                    )
-                  )
-                    setModal(null);
+                  const saved = await mutate(
+                    selected && modal === "editFood"
+                      ? `/foods/${selected.id}`
+                      : "/foods",
+                    modal === "editFood" ? "PATCH" : "POST",
+                    data,
+                  );
+                  if (saved) setModal(null);
+                  return saved;
                 }}
               />
             )}
@@ -1634,104 +1640,6 @@ function ActivityRow({
         <X size={14} />
       </button>
     </div>
-  );
-}
-function FoodForm({
-  food,
-  busy,
-  save,
-}: {
-  food: Food | null;
-  busy: boolean;
-  save: (data: any) => void;
-}) {
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        const f = new FormData(e.currentTarget);
-        const data: any = {
-          name: f.get("name"),
-          baseUnit: f.get("baseUnit"),
-          favorite: f.get("favorite") === "on",
-        };
-        for (const k of ["baseQuantity", "calories", "proteinG"])
-          data[k] = Number(f.get(k));
-        for (const k of ["carbsG", "fatG", "fiberG"])
-          data[k] = f.get(k) ? Number(f.get(k)) : null;
-        save(data);
-      }}
-    >
-      <h2>{food ? "Edit food preset" : "Create a custom food"}</h2>
-      <p>
-        Use nutrition from the label. Historical entries keep their original
-        values.
-      </p>
-      <label>
-        Food name
-        <input name="name" required defaultValue={food?.name} />
-      </label>
-      <div className="form-grid">
-        <label>
-          Base quantity
-          <input
-            name="baseQuantity"
-            required
-            type="number"
-            min="0.01"
-            step="any"
-            defaultValue={food?.baseQuantity || 1}
-          />
-        </label>
-        <label>
-          Unit
-          <select name="baseUnit" defaultValue={food?.baseUnit || "serving"}>
-            {[
-              "g",
-              "ml",
-              "scoop",
-              "slice",
-              "piece",
-              "serving",
-              "tbsp",
-              "tsp",
-            ].map((u) => (
-              <option key={u}>{u}</option>
-            ))}
-          </select>
-        </label>
-        {[
-          ["calories", "Calories (kcal)"],
-          ["proteinG", "Protein (g)"],
-          ["carbsG", "Carbs (g, optional)"],
-          ["fatG", "Fat (g, optional)"],
-          ["fiberG", "Fiber (g, optional)"],
-        ].map(([k, l]) => (
-          <label key={k}>
-            {l}
-            <input
-              name={k}
-              required={["calories", "proteinG"].includes(k)}
-              type="number"
-              min="0"
-              step="any"
-              defaultValue={(food as any)?.[k] ?? ""}
-            />
-          </label>
-        ))}
-      </div>
-      <label className="checkbox">
-        <input
-          name="favorite"
-          type="checkbox"
-          defaultChecked={food?.favorite ?? true}
-        />
-        Save as favorite
-      </label>
-      <button disabled={busy} className="button dark full">
-        Save food
-      </button>
-    </form>
   );
 }
 function ActivityForm({

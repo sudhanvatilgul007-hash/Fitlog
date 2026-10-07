@@ -157,3 +157,9 @@ Create the destination account first and run the command before adding journal e
 
 
 Live provider calls and production deployment require your credentials. PostgreSQL/Docker verification requires Docker or an available PostgreSQL service; no deployment account or production key is included in this repository.
+
+## New foods and nutrition estimates
+
+In **Add food → New food**, enter the food name, base quantity, unit and optional preparation/brand, then select **Estimate nutrition**. Complete nutrition from an exact saved name and unit is scaled locally (no fuzzy matching or g/ml conversion). Otherwise the configured server model estimates calories, protein, carbs, fat and fiber with assumptions shown for review. Enter or adjust label values manually at any time, then save the food and select it from the food picker to log it. Historical entries preserve their original nutrition.
+
+Food estimates use [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs), validated again on the server. Only the food description and portion are sent; profile and journal data are excluded. Identical successful requests are cached per account; concurrent requests make one provider call. Failed estimates need an explicit retry. No AI request happens while typing, opening the form or saving a food. Migration `0004` adds the persistent estimate cache.

@@ -34,6 +34,8 @@ class Food(StrictModel):
     carbsG: float | None = Field(default=None, ge=0)
     fatG: float | None = Field(default=None, ge=0)
     fiberG: float | None = Field(default=None, ge=0)
+    nutritionSource: Literal['manual','saved','ai'] = 'manual'
+    nutritionNotes: str = Field(default='', max_length=1000)
     favorite: bool = True
     sortOrder: int = 0
     active: bool = True
@@ -85,3 +87,28 @@ class AnalysisResponse(StrictModel):
     warnings: list[str]
     recommendations: list[str]
     confidenceNotes: list[str]
+
+class FoodEstimateRequest(StrictModel):
+    name: str = Field(min_length=1, max_length=120)
+    baseQuantity: float = Field(gt=0, le=100000)
+    baseUnit: Literal['g','ml','scoop','slice','piece','serving','tbsp','tsp']
+    details: str = Field(default='', max_length=600)
+    retry: bool = False
+    @model_validator(mode='after')
+    def trim(self):
+        self.name=' '.join(self.name.split())
+        self.details=' '.join(self.details.split())
+        if not self.name: raise ValueError('Enter a food name')
+        return self
+
+class FoodNutrition(StrictModel):
+    calories: float = Field(ge=0, le=1000000)
+    proteinG: float = Field(ge=0, le=100000)
+    carbsG: float = Field(ge=0, le=100000)
+    fatG: float = Field(ge=0, le=100000)
+    fiberG: float = Field(ge=0, le=100000)
+    notes: str = Field(max_length=1000)
+    @model_validator(mode='after')
+    def fiber(self):
+        if self.fiberG > self.carbsG: raise ValueError('Fiber cannot exceed total carbohydrates')
+        return self

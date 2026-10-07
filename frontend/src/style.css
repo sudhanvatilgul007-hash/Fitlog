@@ -1529,3 +1529,28 @@ tbody tr:hover {
     font-size: 28px;
   }
 }
+
+.food-form-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.nutrition-hint {
+  font-size: 12px;
+  line-height: 1.6;
+}
+.nutrition-estimate {
+  background: #f2f7ee;
+  border-radius: 12px;
+  padding: 14px;
+  margin: 14px 0;
+  font-size: 13px;
+}
+.nutrition-estimate p {
+  margin: 6px 0;
+}
+.nutrition-error {
+  color: #a32e29;
+  font-size: 13px;
+}

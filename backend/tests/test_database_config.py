@@ -54,4 +54,4 @@ def test_migrations_start_with_empty_volume_and_ignore_local_dotenv(tmp_path):
     result = subprocess.run([sys.executable, '-m', 'alembic', 'upgrade', 'head'], cwd=backend, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     with create_engine(f'sqlite:///{tmp_path / "fitlog.db"}').connect() as connection:
-        assert connection.execute(text('select version_num from alembic_version')).scalar() == '0003'
+        assert connection.execute(text('select version_num from alembic_version')).scalar() == '0004'

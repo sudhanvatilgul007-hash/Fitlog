@@ -9,7 +9,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from .database import Session
 from .models import UserSettings, FoodPreset, DailyLog, FoodEntry, ActivityEntry, DailyAnalysis
-from .schemas import Settings, Food, FoodAdd, FoodEdit, Weight, TDEE, Activity, Analyze, AnalysisResponse
+from .schemas import Settings, Food, FoodEstimateRequest, FoodAdd, FoodEdit, Weight, TDEE, Activity, Analyze, AnalysisResponse
 from .calculations import snapshot, snapshot_hash, averages, food_totals
 from .provider import get_provider, ProviderError
 logger=logging.getLogger("fitlog.analysis")
@@ -115,6 +115,11 @@ def foods(favorite:bool|None=None,db=Depends(session)):
         matches=[e for e in entries if e.data['foodPresetId']==r['id']]
         r['lastUsed']=max((e.data.get('addedAt','') for e in matches),default='')
     return sorted(rows,key=lambda r:(-r['usageCount'],r['sortOrder'],r['name']))
+@app.post('/api/foods/estimate')
+def food_estimate(body:FoodEstimateRequest,db=Depends(session)):
+    from .food_estimates import estimate_food
+    return estimate_food(body,db,get_provider)
+
 @app.post('/api/foods',status_code=201)
 def create_food(body:Food,db=Depends(session)):
     row=FoodPreset(id=str(uuid4()),user_id=db.info['user_id'],data=body.model_dump());db.add(row);db.commit()

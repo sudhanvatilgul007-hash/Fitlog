@@ -68,3 +68,11 @@ class AuthSession(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey('users.id'), index=True)
     csrf: Mapped[str] = mapped_column(String)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+class FoodNutritionEstimate(Base):
+    __tablename__ = 'food_nutrition_estimates'
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, index=True)
+    status: Mapped[str] = mapped_column(String, default='pending')
+    response: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
