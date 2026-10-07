@@ -14,12 +14,15 @@ class Settings(StrictModel):
     weightMinKg: float = Field(default=20, gt=0)
     weightMaxKg: float = Field(default=350, gt=0)
     tdeeProfiles: dict[str, float] = Field(default_factory=lambda: {'sedentary':2500, 'high_walking':3000, 'gym_walking':3250})
+    activityFactors: dict[str,float] = Field(default_factory=lambda: {'sedentary':1.2,'high_walking':1.55,'gym_walking':1.725})
     @model_validator(mode='after')
     def ranges(self):
         if self.proteinMaxG < self.proteinMinG or self.deficitMaxKcal < self.deficitMinKcal or self.weightMaxKg <= self.weightMinKg:
             raise ValueError('Maximum must be greater than or equal to minimum')
         if 'sedentary' not in self.tdeeProfiles or 'automatic' in self.tdeeProfiles or 'custom' in self.tdeeProfiles or any(not 500 <= n <= 10000 for n in self.tdeeProfiles.values()):
             raise ValueError('TDEE profiles must be between 500 and 10000 kcal')
+        if set(self.activityFactors)!={'sedentary','high_walking','gym_walking'} or any(not 1<=v<=2.5 for v in self.activityFactors.values()):
+            raise ValueError('Activity factors must be between 1 and 2.5')
         return self
 
 class Food(StrictModel):

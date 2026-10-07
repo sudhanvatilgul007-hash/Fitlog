@@ -59,9 +59,9 @@ The provider issues one HTTP request with strict schema output and no automatic 
 
 - Nutrition = preset label values × entered quantity / base quantity.
 - Walking estimate = configurable coefficient (0.5 initially) × weight kg × km. 95.5 kg × 8.16 km gives 389.64 kcal.
-- Automatic mode: baseline = sedentary calibration kcal × daily weight / calibration weight. Defaults are 2500 kcal at 95.5 kg. Total estimated expenditure (TDEE) = this baseline + logged walking + net logged exercise. Deficit = total expenditure − food calories. This proportional weight model is a rough calibration, not a BMR equation or a substitute for age/height/body-composition inputs.
-- Full-day activity profiles also scale with weight against the calibration weight, but do not add logged activity again. Custom TDEE overrides remain fixed and include the whole day. The UI shows the baseline, active calories and total separately.
-- Change the calibration weight and profile calories in Settings. Today/future logs adopt those changes; existing historical logs retain per-day calibration. The upgrade preserves legacy past days as fixed estimates; explicitly editing their weight or selecting a new expenditure mode opts them into the new model. Existing analysis snapshots remain stored and become stale when their inputs or calculation method change.
+- Resting expenditure uses the published [Mifflin–St Jeor equation](https://pubmed.ncbi.nlm.nih.gov/2305711/): `10 × weight(kg) + 6.25 × height(cm) − 5 × age(years) + s`, with `s = +5` for male and `s = −161` for female. Signup collects male/female, age, weight, and height. Daily logged weight changes the estimate immediately; update age and height in Settings as needed.
+- Automatic TDEE = resting expenditure × sedentary activity factor (default 1.2) + logged net active calories. Deficit = TDEE − food intake. Moderate and very active full-day profiles use 1.55 and 1.725 respectively, without adding logged exercise again. These configurable multipliers are described in [Texas Health and Human Services comparative standards](https://www.hhs.texas.gov/sites/default/files/documents/common-comparative-standards-for-rds-ltc-settings.pdf). The original Mifflin paper estimates resting expenditure, not the activity multiplier or individual exercise burn.
+- Custom TDEE remains a fixed full-day override. Changing profile weight updates today’s logged weight. Today/future logs adopt edited profile inputs and activity factors; past logs retain their saved inputs and calculation version. Legacy past logs preserve their original fixed/calibrated calculation until explicitly updating weight or selecting a new mode. Stored AI snapshots remain immutable.
 - Cycling uses 6 MET; resistance uses 3.5 MET; treadmill uses a level-walking speed estimate. For the new model, net exercise = (MET − 1) × 3.5 × weight kg / 200 × duration minutes, subtracting resting energy already represented in the baseline. MET definitions follow the [Physical Activity Compendium](https://pacompendium.com/). Walking retains the configured distance formula. Manual/imported calories must be active calories above rest and must not duplicate an already logged walk/workout. New gym logs require duration; older workouts without duration are visibly marked incomplete and excluded until edited. These are estimates, not personalized physiological calculations.
 - Missing carb/fat labels are marked as partial totals, rather than presented as complete data.
 - History averages use recorded days, including unfinished logs. The seven- and thirty-day windows end at `to` or the server’s current date. Protein adherence uses the current configured minimum.
@@ -74,7 +74,7 @@ If the server dies after claiming an analysis, it deliberately leaves the claim 
 
 ## Seed data
 
-Weight 95.5 kg; TDEE profiles 2500/3000/3250 kcal; protein 150–170 g; deficit 800–1000 kcal. Biozyme, Amul, bread, cheese and Pintola values follow the PRD. Soya, chapathi, rice, dal, palak dal and palya are editable starter estimates because exact label/recipe values were not supplied. Update these in Settings. Historical nutrition snapshots do not change when you edit these estimates.
+Each account starts with its signup weight, formula-based TDEE, protein 150–170 g and deficit 800–1000 kcal targets. Biozyme, Amul, bread, cheese and Pintola values follow the PRD. Soya, chapathi, rice, dal, palak dal and palya are editable starter estimates because exact label/recipe values were not supplied. Update these in Settings. Historical nutrition snapshots do not change when you edit these estimates.
 
 ## Verify
 
@@ -88,7 +88,7 @@ npm test
 npm run build
 ```
 
-Backend coverage includes deterministic nutrition and walking, immutable history, zero provider calls from CRUD/history, unchanged snapshot reuse, confirmation for changed snapshots, invalid output/network retry behavior, weight/unit validation and simultaneous Analyze requests. Frontend tests check quantity scaling, date formatting and error propagation. The frontend lockfile and backend lock requirements capture verified dependency versions.
+Backend coverage includes signup/login/logout, session expiration, CSRF enforcement, account isolation, male/female formula results, profile history preservation, deterministic nutrition and walking, immutable history, zero provider calls from CRUD/history, unchanged snapshot reuse, confirmation for changed snapshots, invalid output/network retry behavior, weight/unit validation and simultaneous Analyze requests. Frontend tests check quantity scaling, date formatting and error propagation. The frontend lockfile and backend lock requirements capture verified dependency versions.
 
 For PostgreSQL locally (Docker required):
 
@@ -131,6 +131,17 @@ The combined Railway deployment above does not need Netlify. Use this section on
 4. Set the custom domain in Netlify, then update backend `FRONTEND_URL` and `CORS_ORIGINS`.
 5. Verify on a phone: add 8–12 entries, select TDEE, analyze once, reopen history and verify stored analysis. Confirm that provider logs show only the explicit analysis requests.
 
-This MVP intentionally has no authentication, as specified by the PRD. Put deployment behind a private access gateway that protects **both** the frontend and backend, or keep it local; CORS is not authentication. Do not publish personal journal data through an unprotected public API. The models include user ownership fields and a per-user daily uniqueness constraint for a future auth implementation; current routes serve the single `personal` owner.
+## Accounts and existing data
+
+Signup/login uses scrypt password hashes and opaque seven-day HttpOnly cookie sessions. Mutations require a session CSRF token. Logout revokes the session in the database. Every journal, history, food and settings route is scoped to the authenticated account; `/api/health` remains public. Sessions use Secure cookies on Railway or with `APP_ENV=production`; use `APP_ENV=development` for local HTTP. Login/signup attempts are limited within the single server process (20 per client per 15 minutes); a shared limiter is needed before scaling replicas.
+
+The authentication migration preserves the old `personal` journal without exposing it to new signups. To transfer it, an administrator must verify the destination account owner, then run in the backend service environment:
+
+```sh
+python -m app.claim_legacy owner@example.com --confirm
+```
+
+Create the destination account first and run the command before adding journal entries. Empty destination days are replaced; transfer refuses an account with entries or analyses. Legacy foods and settings are preserved, and stored analysis snapshots stay untouched. No public API can claim someone else's old data.
+
 
 Live provider calls and production deployment require your credentials. PostgreSQL/Docker verification requires Docker or an available PostgreSQL service; no deployment account or production key is included in this repository.

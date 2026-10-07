@@ -2,7 +2,7 @@ import os
 from datetime import date, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
@@ -14,33 +14,44 @@ from .provider import get_provider
 
 app = FastAPI(title='fitlog')
 app.add_middleware(CORSMiddleware,allow_origins=os.getenv('CORS_ORIGINS','http://localhost:5173').split(','),allow_methods=['*'],allow_headers=['*'])
-def session():
+from .auth import router as auth_router, authenticate
+app.include_router(auth_router)
+
+@app.middleware('http')
+async def private_api_cache(request: Request, call_next):
+    response=await call_next(request)
+    if request.url.path.startswith('/api/'):
+        response.headers['Cache-Control']='no-store'
+    return response
+
+def session(request: Request):
     with Session() as db:
+        authenticate(request,db)
         yield db
 
 def settings(db):
-    row=db.get(UserSettings,'personal')
+    row=db.get(UserSettings,db.info['user_id'])
     if not row:
         raise HTTPException(503,'Run migrations and seed first')
     return Settings.model_validate(row.data).model_dump()
 
-def expenditure_config(s):
-    return {'version':2,'referenceWeightKg':s['tdeeReferenceWeightKg'],'walkingCoefficient':s['walkingCoefficient']}
+def expenditure_config(s, profile):
+    return {'version':3,'walkingCoefficient':s['walkingCoefficient'],'gender':profile['gender'],'age':profile['age'],'heightCm':profile['heightCm'],'activityFactors':s['activityFactors']}
 
 def get_log(db, day):
-    log=db.scalar(select(DailyLog).where(DailyLog.date==day.isoformat(),DailyLog.user_id=='personal'))
+    log=db.scalar(select(DailyLog).where(DailyLog.date==day.isoformat(),DailyLog.user_id==db.info['user_id']))
     if not log:
-        previous=db.scalar(select(DailyLog).where(DailyLog.date<day.isoformat()).order_by(DailyLog.date.desc()))
+        previous=db.scalar(select(DailyLog).where(DailyLog.user_id==db.info['user_id'],DailyLog.date<day.isoformat()).order_by(DailyLog.date.desc()))
         s=settings(db)
-        log=DailyLog(id=str(uuid4()),date=day.isoformat(),weight_kg=previous.weight_kg if previous else 95.5,profile='automatic',tdee=s['tdeeProfiles']['sedentary'],expenditure_config=expenditure_config(s))
+        log=DailyLog(id=str(uuid4()),user_id=db.info['user_id'],date=day.isoformat(),weight_kg=previous.weight_kg if previous else db.info['user'].profile['weightKg'],profile='automatic',tdee=s['tdeeProfiles']['sedentary'],expenditure_config=expenditure_config(s,db.info['user'].profile))
         db.add(log)
         try: db.commit()
         except IntegrityError:
             db.rollback()
-            log=db.scalar(select(DailyLog).where(DailyLog.date==day.isoformat(),DailyLog.user_id=='personal'))
+            log=db.scalar(select(DailyLog).where(DailyLog.date==day.isoformat(),DailyLog.user_id==db.info['user_id']))
     today=datetime.now(ZoneInfo(os.getenv('APP_TIMEZONE','Asia/Kolkata'))).date()
-    if day>=today and (not log.expenditure_config or log.expenditure_config.get('version')==1):
-        s=settings(db);log.expenditure_config=expenditure_config(s)
+    if day>=today and (not log.expenditure_config or log.expenditure_config.get('version',1)<3):
+        s=settings(db);log.expenditure_config=expenditure_config(s,db.info['user'].profile)
         if log.profile!='custom':log.profile='automatic';log.tdee=s['tdeeProfiles']['sedentary']
         db.commit()
     return log
@@ -77,26 +88,26 @@ def weight(day:date,body:Weight,db=Depends(session)):
     s=settings(db)
     if not s['weightMinKg']<=body.weightKg<=s['weightMaxKg']: raise HTTPException(422,'Weight outside configured range')
     log=get_log(db,day); log.weight_kg=body.weightKg
-    if not log.expenditure_config or log.expenditure_config.get('version')==1:
-        log.expenditure_config=expenditure_config(s)
+    if not log.expenditure_config or log.expenditure_config.get('version',1)<3:
+        log.expenditure_config=expenditure_config(s,db.info['user'].profile)
         if log.profile!='custom':log.profile='automatic';log.tdee=s['tdeeProfiles']['sedentary']
     db.commit()
     return log_data(db,log)
 @app.put('/api/logs/{day}/tdee')
 def tdee(day:date,body:TDEE,db=Depends(session)):
     profiles=settings(db)['tdeeProfiles']
-    if body.profile not in profiles and body.profile not in ('custom','automatic'): raise HTTPException(422,'Unknown TDEE profile')
-    value=body.kcal if body.kcal is not None else profiles.get('sedentary' if body.profile=='automatic' else body.profile)
+    if body.profile not in settings(db)['activityFactors'] and body.profile not in ('custom','automatic'): raise HTTPException(422,'Unknown TDEE profile')
+    value=body.kcal if body.profile=='custom' else profiles.get('sedentary' if body.profile=='automatic' else body.profile,2500)
     if value is None: raise HTTPException(422,'Custom TDEE requires kcal')
-    log=get_log(db,day);log.profile=body.profile;log.tdee=value;log.expenditure_config=expenditure_config(settings(db));db.commit()
+    log=get_log(db,day);log.profile=body.profile;log.tdee=value;log.expenditure_config=expenditure_config(settings(db),db.info['user'].profile);db.commit()
     return log_data(db,log)
 @app.get('/api/foods')
 def foods(favorite:bool|None=None,db=Depends(session)):
-    entries=list(db.scalars(select(FoodEntry)))
+    entries=list(db.scalars(select(FoodEntry).join(DailyLog).where(DailyLog.user_id==db.info['user_id'])))
     usage={}
     for e in entries:
         id=e.data['foodPresetId']; usage[id]=usage.get(id,0)+1
-    rows=[{'id':r.id,**r.data,'usageCount':usage.get(r.id,0)} for r in db.scalars(select(FoodPreset)) if r.data['active'] and (favorite is None or r.data['favorite']==favorite)]
+    rows=[{'id':r.id,**r.data,'usageCount':usage.get(r.id,0)} for r in db.scalars(select(FoodPreset).where(FoodPreset.user_id==db.info['user_id'])) if r.data['active'] and (favorite is None or r.data['favorite']==favorite)]
     # Recent order uses daily log date plus entry insertion order below.
     for r in rows:
         matches=[e for e in entries if e.data['foodPresetId']==r['id']]
@@ -104,24 +115,24 @@ def foods(favorite:bool|None=None,db=Depends(session)):
     return sorted(rows,key=lambda r:(-r['usageCount'],r['sortOrder'],r['name']))
 @app.post('/api/foods',status_code=201)
 def create_food(body:Food,db=Depends(session)):
-    row=FoodPreset(id=str(uuid4()),data=body.model_dump());db.add(row);db.commit()
+    row=FoodPreset(id=str(uuid4()),user_id=db.info['user_id'],data=body.model_dump());db.add(row);db.commit()
     return {'id':row.id,**row.data}
 @app.patch('/api/foods/{id}')
 def edit_food(id:str,body:dict,db=Depends(session)):
     row=db.get(FoodPreset,id)
-    if not row: raise HTTPException(404,'Food not found')
+    if not row or row.user_id!=db.info['user_id']: raise HTTPException(404,'Food not found')
     try: row.data=Food.model_validate({**row.data,**body}).model_dump()
     except ValueError as exc: raise HTTPException(422,'Invalid food values') from exc
     db.commit();return {'id':row.id,**row.data}
 @app.delete('/api/foods/{id}')
 def delete_food(id:str,db=Depends(session)):
     row=db.get(FoodPreset,id)
-    if not row: raise HTTPException(404,'Food not found')
+    if not row or row.user_id!=db.info['user_id']: raise HTTPException(404,'Food not found')
     row.data={**row.data,'active':False};db.commit();return {'ok':True}
 @app.post('/api/logs/{day}/foods',status_code=201)
 def add_food(day:date,body:FoodAdd,db=Depends(session)):
     log=get_log(db,day); preset=db.get(FoodPreset,body.foodPresetId)
-    if not preset or not preset.data['active']:raise HTTPException(404,'Food not found')
+    if not preset or preset.user_id!=db.info['user_id'] or not preset.data['active']:raise HTTPException(404,'Food not found')
     if body.unit!=preset.data['baseUnit']:raise HTTPException(422,'Use the preset unit; create a separate preset for a different unit')
     entry=FoodEntry(id=str(uuid4()),log_id=log.id,data={'foodPresetId':preset.id,'displayName':preset.data['name'],'quantity':body.quantity,'unit':body.unit,'nutrition':preset.data.copy(),'addedAt':datetime.now().isoformat()})
     db.add(entry);db.commit();return log_data(db,log)
@@ -146,10 +157,10 @@ def remove_activity(day:date,id:str,db=Depends(session)):
 def read_settings(db=Depends(session)):return settings(db)
 @app.put('/api/settings')
 def put_settings(body:Settings,db=Depends(session)):
-    row=db.get(UserSettings,'personal');row.data=body.model_dump()
+    row=db.get(UserSettings,db.info['user_id']);row.data=body.model_dump()
     today=datetime.now(ZoneInfo(os.getenv('APP_TIMEZONE','Asia/Kolkata'))).date().isoformat()
-    for log in db.scalars(select(DailyLog).where(DailyLog.date>=today)):
-        log.expenditure_config=expenditure_config(row.data)
+    for log in db.scalars(select(DailyLog).where(DailyLog.user_id==db.info['user_id'],DailyLog.date>=today)):
+        log.expenditure_config=expenditure_config(row.data,db.info['user'].profile)
         if log.profile!='custom':log.tdee=row.data['tdeeProfiles'].get('sedentary' if log.profile=='automatic' else log.profile,log.tdee)
     db.commit();return row.data
 @app.get('/api/logs/{day}/analysis')
@@ -192,7 +203,7 @@ def history(from_:date|None=Query(None,alias='from'),to:date|None=None,db=Depend
     start=from_ or end-timedelta(days=29)
     if start>end:raise HTTPException(422,'Start date must precede end date')
     days=[]
-    for log in db.scalars(select(DailyLog).where(DailyLog.date>=start.isoformat(),DailyLog.date<=end.isoformat()).order_by(DailyLog.date)):
+    for log in db.scalars(select(DailyLog).where(DailyLog.user_id==db.info['user_id'],DailyLog.date>=start.isoformat(),DailyLog.date<=end.isoformat()).order_by(DailyLog.date)):
         data=normalized(db,log);days.append({'date':log.date,'weightKg':log.weight_kg,**data['calculated']})
     last7=[d for d in days if d['date']>=(end-timedelta(days=6)).isoformat()]
     last30=[d for d in days if d['date']>=(end-timedelta(days=29)).isoformat()]

@@ -22,6 +22,7 @@ import {
 const TrendChart = lazy(() => import("./TrendChart"));
 import { api, scaled, localDate } from "./api";
 import "./style.css";
+import { AuthGate, ProfileFields, profileData, User } from "./Auth";
 
 type Food = {
   id: string;
@@ -44,12 +45,20 @@ const profileName = (s: string) =>
   ({
     automatic: "Automatic · weight + logged activity",
     sedentary: "Sedentary",
-    high_walking: "High walking",
-    gym_walking: "Gym + high walking",
+    high_walking: "Moderately active",
+    gym_walking: "Very active",
     custom: "Custom",
   })[s] || s.replace(/_/g, " ");
 const activityName = (s: string) => s.replace(/_/g, " ");
-function App() {
+function App({
+  user,
+  logout,
+  updateUser,
+}: {
+  user: User;
+  logout: () => Promise<void>;
+  updateUser: (user: User) => void;
+}) {
   const [screen, setScreen] = useState("today"),
     [day, setDay] = useState(localDate()),
     [log, setLog] = useState<any>(null),
@@ -209,9 +218,10 @@ function App() {
           <p>A little consistency goes a long way. Make today count.</p>
         </div>
         <div className="profile">
-          <span>ST</span>
+          <span>{user.email.slice(0, 2).toUpperCase()}</span>
           <div>
-            Personal journal<small>Your space to get stronger</small>
+            {user.email}
+            <small>Your private journal</small>
           </div>
         </div>
       </aside>
@@ -755,18 +765,28 @@ function App() {
                             <option value="automatic">
                               Automatic · weight + logged activity
                             </option>
-                            {Object.entries(settings.tdeeProfiles).map(
-                              ([k, v]) => (
-                                <option key={k} value={k}>
-                                  {profileName(k)} ·{" "}
-                                  {fmt(
-                                    (Number(v) * log.weightKg) /
-                                      settings.tdeeReferenceWeightKg,
-                                  )}{" "}
-                                  kcal est.
-                                </option>
-                              ),
-                            )}
+                            {Object.entries(
+                              log.expenditureConfig.activityFactors ||
+                                settings.activityFactors,
+                            ).map(([k, v]) => (
+                              <option key={k} value={k}>
+                                {profileName(k)} ·{" "}
+                                {fmt(
+                                  (10 * log.weightKg +
+                                    6.25 *
+                                      (log.expenditureConfig.heightCm ||
+                                        user.heightCm) -
+                                    5 *
+                                      (log.expenditureConfig.age || user.age) +
+                                    ((log.expenditureConfig.gender ||
+                                      user.gender) === "male"
+                                      ? 5
+                                      : -161)) *
+                                    Number(v),
+                                )}{" "}
+                                kcal est.
+                              </option>
+                            ))}
                             <option value="custom">Custom override</option>
                           </select>
                         </label>
@@ -789,8 +809,8 @@ function App() {
                         )}
                         <div className="burn">
                           <span>
-                            {total.expenditureMethod === "weight_activity"
-                              ? "Weight-based baseline"
+                            {total.activityIncluded
+                              ? "Daily baseline"
                               : "Selected full-day estimate"}
                           </span>
                           <b>
@@ -817,12 +837,36 @@ function App() {
                         </div>
                         {total.expenditureMethod !== "fixed" && (
                           <p>
-                            {fmt(total.referenceTDEEKcal)} kcal × {log.weightKg}{" "}
-                            kg / {total.referenceWeightKg} kg
-                            {total.activityIncluded
-                              ? " + logged active calories"
-                              : ""}
-                            . This is a calibrated weight-based estimate.
+                            {total.expenditureMethod === "mifflin_st_jeor" ? (
+                              <>
+                                Mifflin–St Jeor: 10 × {log.weightKg} kg + 6.25 ×{" "}
+                                {log.expenditureConfig.heightCm} cm − 5 ×{" "}
+                                {log.expenditureConfig.age} years{" "}
+                                {log.expenditureConfig.gender === "male"
+                                  ? "+ 5"
+                                  : "− 161"}{" "}
+                                = {fmt(total.restingExpenditureKcal)} kcal/day
+                                at rest. × {total.activityFactor}
+                                {total.activityIncluded
+                                  ? " + logged active calories"
+                                  : ""}
+                                .{" "}
+                                <a
+                                  href="https://pubmed.ncbi.nlm.nih.gov/2305711/"
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  Published equation
+                                </a>
+                              </>
+                            ) : (
+                              <>
+                                Historical calibration:{" "}
+                                {fmt(total.referenceTDEEKcal)} kcal ×{" "}
+                                {log.weightKg} kg / {total.referenceWeightKg}{" "}
+                                kg.
+                              </>
+                            )}
                           </p>
                         )}
                         <p>
@@ -1005,6 +1049,48 @@ function App() {
                 onSubmit={async (e) => {
                   e.preventDefault();
                   const f = new FormData(e.currentTarget);
+                  setBusy(true);
+                  setError("");
+                  try {
+                    const updated = await api<User>(
+                      "/auth/profile",
+                      "PUT",
+                      profileData(f),
+                    );
+                    updateUser(updated);
+                    await load();
+                  } catch (e) {
+                    setError((e as Error).message);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                <h2>Your profile</h2>
+                <p>{user.email}</p>
+                <ProfileFields user={user} />
+                <p>
+                  Daily logged weight drives expenditure. Changing profile weight
+                  updates today’s logged weight. Keep your age up to date. Past
+                  calculation inputs are preserved.
+                </p>
+                <button className="button dark" disabled={busy}>
+                  Save profile
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={busy}
+                  onClick={logout}
+                >
+                  Log out
+                </button>
+              </form>
+              <form
+                className="card settings-form"
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  const f = new FormData(e.currentTarget);
                   const s = {
                     ...settings,
                     tdeeProfiles: { ...settings.tdeeProfiles },
@@ -1015,17 +1101,30 @@ function App() {
                     "deficitMinKcal",
                     "deficitMaxKcal",
                     "walkingCoefficient",
-                    "tdeeReferenceWeightKg",
                     "weightMinKg",
                     "weightMaxKg",
                   ])
                     s[key] = Number(f.get(key));
-                  for (const k of Object.keys(s.tdeeProfiles))
-                    s.tdeeProfiles[k] = Number(f.get("profile_" + k));
+                  s.activityFactors = { ...settings.activityFactors };
+                  for (const k of Object.keys(s.activityFactors))
+                    s.activityFactors[k] = Number(f.get("profile_" + k));
                   await mutate("/settings", "PUT", s);
                 }}
               >
                 <h2>Targets & calculations</h2>
+                <p>
+                  Automatic uses the sedentary multiplier plus logged active
+                  calories. Moderate/very active profiles include exercise for
+                  the full day. Defaults are 1.2, 1.55 and 1.725;{" "}
+                  <a
+                    href="https://www.hhs.texas.gov/sites/default/files/documents/common-comparative-standards-for-rds-ltc-settings.pdf"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    activity factor reference
+                  </a>
+                  .
+                </p>
                 <div className="settings-grid">
                   {[
                     ["proteinMinG", "Protein minimum (g)"],
@@ -1033,7 +1132,6 @@ function App() {
                     ["deficitMinKcal", "Deficit minimum (kcal)"],
                     ["deficitMaxKcal", "Deficit maximum (kcal)"],
                     ["walkingCoefficient", "Walking coefficient"],
-                    ["tdeeReferenceWeightKg", "TDEE calibration weight (kg)"],
                     ["weightMinKg", "Minimum weight (kg)"],
                     ["weightMaxKg", "Maximum weight (kg)"],
                   ].map(([k, l]) => (
@@ -1048,16 +1146,17 @@ function App() {
                       />
                     </label>
                   ))}
-                  {Object.keys(settings.tdeeProfiles).map((k) => (
+                  {Object.keys(settings.activityFactors).map((k) => (
                     <label key={k}>
-                      {profileName(k)} at calibration weight (kcal)
+                      {profileName(k)} activity multiplier
                       <input
                         name={"profile_" + k}
                         type="number"
-                        min="500"
-                        max="10000"
+                        min="1"
+                        max="2.5"
+                        step="0.001"
                         required
-                        defaultValue={settings.tdeeProfiles[k]}
+                        defaultValue={settings.activityFactors[k]}
                       />
                     </label>
                   ))}
@@ -1773,6 +1872,15 @@ function ActivityForm({
 }
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <AuthGate>
+      {(user, logout, updateUser) => (
+        <App
+          key={user.id}
+          user={user}
+          logout={logout}
+          updateUser={updateUser}
+        />
+      )}
+    </AuthGate>
   </React.StrictMode>,
 );

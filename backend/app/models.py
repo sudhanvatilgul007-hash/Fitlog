@@ -54,3 +54,17 @@ class DailyAnalysis(Base):
     model: Mapped[str] = mapped_column(String)
     prompt_version: Mapped[str] = mapped_column(String, default='1')
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+class User(Base):
+    __tablename__ = 'users'
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    email: Mapped[str] = mapped_column(String, unique=True)
+    password_hash: Mapped[str] = mapped_column(String)
+    profile: Mapped[dict] = mapped_column(JSON)
+
+class AuthSession(Base):
+    __tablename__ = 'auth_sessions'
+    token_hash: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey('users.id'), index=True)
+    csrf: Mapped[str] = mapped_column(String)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
