@@ -1,4 +1,5 @@
 import os
+import logging
 from datetime import date, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -10,7 +11,8 @@ from .database import Session
 from .models import UserSettings, FoodPreset, DailyLog, FoodEntry, ActivityEntry, DailyAnalysis
 from .schemas import Settings, Food, FoodAdd, FoodEdit, Weight, TDEE, Activity, Analyze, AnalysisResponse
 from .calculations import snapshot, snapshot_hash, averages, food_totals
-from .provider import get_provider
+from .provider import get_provider, ProviderError
+logger=logging.getLogger("fitlog.analysis")
 
 app = FastAPI(title='fitlog')
 app.add_middleware(CORSMiddleware,allow_origins=os.getenv('CORS_ORIGINS','http://localhost:5173').split(','),allow_methods=['*'],allow_headers=['*'])
@@ -176,7 +178,10 @@ def analyze(day:date,body:Analyze,db=Depends(session)):
     if row and row.status=='pending':raise HTTPException(409,'Analysis is in progress. Reopen stored analysis shortly; no extra call was made.')
     previous=db.scalar(select(DailyAnalysis).where(DailyAnalysis.log_id==log.id,DailyAnalysis.status=='complete'))
     if previous and not body.confirmReanalysis:raise HTTPException(409,'Re-analysis requires confirmation; it makes a new paid request')
-    provider=get_provider()
+    try: provider=get_provider()
+    except ProviderError as exc:
+        logger.warning('analysis_config_error category=%s',exc.code)
+        raise HTTPException(exc.status,str(exc)) from None
     if row:
         if not body.retry:raise HTTPException(409,'Previous request failed. Use explicit retry.')
         claim=db.execute(update(DailyAnalysis).where(DailyAnalysis.id==row.id,DailyAnalysis.status=='failed').values(status='pending',provider=provider.name,model=provider.model))
@@ -192,9 +197,14 @@ def analyze(day:date,body:Analyze,db=Depends(session)):
     try:
         row.response=AnalysisResponse.model_validate(provider.analyze(snap)).model_dump()
         row.status='complete';db.commit()
-    except Exception:
+    except Exception as exc:
         db.rollback();db.refresh(row);row.status='failed';db.commit()
-        raise HTTPException(502,'Analysis failed or returned invalid JSON. Your log is saved. Check server provider configuration and explicitly retry.')
+        if isinstance(exc,ProviderError):
+            logger.warning('analysis_failed analysis_id=%s category=%s upstream_status=%s request_id=%s',row.id,exc.code,exc.upstream_status,exc.request_id)
+            raise HTTPException(exc.status,str(exc)) from None
+        # Do not log raw exceptions or payloads, which may contain journal data/secrets.
+        logger.error('analysis_failed analysis_id=%s exception_type=%s',row.id,type(exc).__name__)
+        raise HTTPException(502,'Analysis could not be completed. Your log is saved. Check server logs and explicitly retry.') from None
     db.refresh(log)
     return analysis_data(row,snapshot_hash(normalized(db,log)))
 @app.get('/api/history')
