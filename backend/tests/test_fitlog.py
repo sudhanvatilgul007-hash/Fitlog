@@ -322,3 +322,87 @@ def test_administrator_legacy_transfer_requires_empty_destination(setup):
     assert c.patch('/api/foods/whey',json={'proteinG':26}).status_code==200
     with session() as db:
         with pytest.raises(ValueError,match='already has journal entries'):claim(db,'female@example.com')
+
+def test_missing_analysis_key_is_actionable_and_creates_no_claim(setup,monkeypatch,caplog):
+    c,p,session=setup
+    from app.provider import get_provider
+    monkeypatch.setattr(main,'get_provider',get_provider)
+    monkeypatch.delenv('LLM_API_KEY',raising=False)
+    response=c.post(DAY+'/analyze',json={})
+    assert response.status_code==503
+    assert 'Add LLM_API_KEY' in response.json()['detail']
+    assert 'Railway' in response.json()['detail']
+    with session() as db: assert list(db.scalars(select(DailyAnalysis)))==[]
+    assert 'missing_api_key' in caplog.text and p.calls==0
+
+@pytest.mark.parametrize('status,code,expected',[
+    (401,'invalid_api_key','invalid_api_key'),
+    (429,'insufficient_quota','provider_quota'),
+    (429,'rate_limit_exceeded','provider_rate_limit'),
+    (400,None,'provider_request_rejected'),
+    (404,'model_not_found','model_unavailable'),
+    (403,None,'provider_access_denied'),
+    (503,None,'provider_unavailable'),
+])
+def test_provider_http_errors_are_safe_and_no_retry(monkeypatch,status,code,expected):
+    import httpx
+    from app.provider import OpenAICompatibleProvider,ProviderError
+    requests=[]
+    secret='secret-should-not-appear'
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(status,json={'error':{'code':code,'message':secret}},headers={'x-request-id':'req_123'})
+    original=httpx.Client
+    monkeypatch.setenv('LLM_API_KEY',secret)
+    monkeypatch.setenv('LLM_BASE_URL','https://api.openai.com/v1/')
+    monkeypatch.setattr(httpx,'Client',lambda **kwargs:original(transport=httpx.MockTransport(handler),**kwargs))
+    with pytest.raises(ProviderError) as result:OpenAICompatibleProvider().analyze({})
+    assert result.value.code==expected
+    assert result.value.upstream_status==status and result.value.request_id=='req_123'
+    assert secret not in str(result.value) and len(requests)==1
+    assert str(requests[0].url)=='https://api.openai.com/v1/chat/completions'
+
+@pytest.mark.parametrize('payload,expected',[
+    ({'choices':[{'message':{'refusal':'private refusal data','content':None}}]},'provider_refusal'),
+    ({'choices':[{'finish_reason':'length','message':{'content':'partial'}}]},'provider_truncated'),
+    ({'choices':[]},'provider_invalid_response'),
+    ({'choices':[{'message':{'content':'not JSON'}}]},'provider_invalid_response'),
+    ({'choices':[{'message':{'content':'{"summary":"incomplete"}'}}]},'provider_invalid_response'),
+    ([], 'provider_invalid_response'),
+])
+def test_invalid_provider_payload_is_safe(monkeypatch,payload,expected):
+    import httpx
+    from app.provider import OpenAICompatibleProvider,ProviderError
+    original=httpx.Client
+    monkeypatch.setenv('LLM_API_KEY','test-key')
+    monkeypatch.setattr(httpx,'Client',lambda **kwargs:original(transport=httpx.MockTransport(lambda r:httpx.Response(200,json=payload)),**kwargs))
+    with pytest.raises(ProviderError) as result:OpenAICompatibleProvider().analyze({})
+    assert result.value.code==expected and 'private refusal data' not in str(result.value)
+
+def test_typed_provider_failure_persists_failed_claim_and_safe_logs(setup,monkeypatch,caplog):
+    c,p,session=setup
+    from app.provider import ProviderError
+    def fail(snapshot):raise ProviderError('provider_quota','Provider API credits are exhausted.',upstream_status=429,request_id='req_abc')
+    monkeypatch.setattr(p,'analyze',fail)
+    response=c.post(DAY+'/analyze',json={})
+    assert response.status_code==502 and response.json()['detail']=='Provider API credits are exhausted.'
+    assert c.get(DAY).json()['analysisAttempt']=='failed'
+    assert c.post(DAY+'/analyze',json={}).status_code==409
+    assert 'provider_quota' in caplog.text and 'req_abc' in caplog.text
+    with session() as db:assert len(list(db.scalars(select(DailyAnalysis))))==1
+
+@pytest.mark.parametrize('kind,expected',[('timeout','provider_timeout'),('connection','provider_connection')])
+def test_provider_network_errors_do_not_retry_or_expose_details(monkeypatch,kind,expected):
+    import httpx
+    from app.provider import OpenAICompatibleProvider,ProviderError
+    requests=[]
+    def handler(request):
+        requests.append(request)
+        error=httpx.ReadTimeout if kind=='timeout' else httpx.ConnectError
+        raise error('private-network-details',request=request)
+    original=httpx.Client
+    monkeypatch.setenv('LLM_API_KEY','test-key')
+    monkeypatch.setattr(httpx,'Client',lambda **kwargs:original(transport=httpx.MockTransport(handler),**kwargs))
+    with pytest.raises(ProviderError) as result:OpenAICompatibleProvider().analyze({})
+    assert result.value.code==expected and len(requests)==1
+    assert 'private-network-details' not in str(result.value)

@@ -1,4 +1,9 @@
 import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load only the backend's local file; deployed environment variables win.
+load_dotenv(Path(__file__).resolve().parent.parent / '.env', override=False)
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 

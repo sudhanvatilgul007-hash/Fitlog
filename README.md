@@ -36,6 +36,10 @@ cd backend
 ../.venv/bin/uvicorn app.main:app --env-file .env --host 127.0.0.1 --port 8000
 ```
 
+The backend automatically loads `backend/.env`; existing shell/Railway variables take precedence. Restart the backend after editing the file. The local example uses SQLite; Docker Compose uses its PostgreSQL service.
+
+`gpt-4.1-nano` is the cheapest GPT-4.1 variant and supports structured output. OpenAI schedules its retirement for October 23, 2026; choose another supported model via `LLM_MODEL` before then. See [official model details](https://developers.openai.com/api/docs/models/gpt-4.1-nano) and [deprecations](https://developers.openai.com/api/docs/deprecations).
+
 The API key is server-only. Do not prefix it with `VITE_`, commit `.env`, or put it in Netlify frontend variables. Without a configured provider key the journal works; analysis returns an error and permits an explicit retry. Tests mock the provider and incur no charges.
 
 Configuration:
@@ -44,7 +48,7 @@ Configuration:
 | --- | --- |
 | `DATABASE_URL` | PostgreSQL connection URL, or local SQLite fallback |
 | `LLM_PROVIDER` | `openai` or `openai-compatible` |
-| `LLM_MODEL` | A model supporting strict JSON schema output; default `gpt-4.1-mini` |
+| `LLM_MODEL` | A model supporting strict JSON schema output; default `gpt-4.1-nano` |
 | `LLM_API_KEY` | Server-side provider key |
 | `LLM_BASE_URL` | OpenAI-compatible API base URL, default `https://api.openai.com/v1` |
 | `APP_TIMEZONE` | Server Today/history calendar, default `Asia/Kolkata` |
@@ -93,7 +97,7 @@ Backend coverage includes signup/login/logout, session expiration, CSRF enforcem
 For PostgreSQL locally (Docker required):
 
 ```sh
-docker compose up --build
+docker compose --env-file backend/.env up --build
 cd frontend
 npm ci
 npm run dev
@@ -130,6 +134,14 @@ The combined Railway deployment above does not need Netlify. Use this section on
 3. The first redirect proxies `/api/*` to Railway. The second provides SPA fallback. No provider key belongs in the frontend environment.
 4. Set the custom domain in Netlify, then update backend `FRONTEND_URL` and `CORS_ORIGINS`.
 5. Verify on a phone: add 8–12 entries, select TDEE, analyze once, reopen history and verify stored analysis. Confirm that provider logs show only the explicit analysis requests.
+
+## Troubleshoot failed analysis
+
+The server needs `LLM_API_KEY` in the Railway **Fitlog service** variables; missing configuration returns HTTP 503 without creating an analysis claim or contacting the provider. Defaults are `LLM_PROVIDER=openai`, `LLM_MODEL=gpt-4.1-nano` and `LLM_BASE_URL=https://api.openai.com/v1`. Keep the key private. A configured key must have API access and available provider credits.
+
+Failures distinguish missing/invalid keys, exhausted quota, rate limits, inaccessible models, request rejection, timeouts, refusal, truncation and invalid structured output. Server logs include a safe category, upstream HTTP status and request ID when available; they omit provider response bodies, API keys and journal contents. There are no automatic retries or fallback provider calls. After correcting the cause, use the explicit Retry action.
+
+**Preserve data before changing configuration or redeploying.** Without `DATABASE_URL`, the backend uses `/app/fitlog.db` in the runtime container. Railway's ephemeral filesystem does not persist across deployments. Back up the running database first, then configure PostgreSQL or a persistent volume mounted at `/data` with `DATABASE_URL=sqlite:////data/fitlog.db`, transferring existing data before switching. Merely attaching a volume does not copy the old database. See [Railway storage documentation](https://docs.railway.com/services#ephemeral-storage).
 
 ## Accounts and existing data
 
