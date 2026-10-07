@@ -22,18 +22,27 @@ def settings(db):
     row=db.get(UserSettings,'personal')
     if not row:
         raise HTTPException(503,'Run migrations and seed first')
-    return row.data
+    return Settings.model_validate(row.data).model_dump()
+
+def expenditure_config(s):
+    return {'version':2,'referenceWeightKg':s['tdeeReferenceWeightKg'],'walkingCoefficient':s['walkingCoefficient']}
 
 def get_log(db, day):
     log=db.scalar(select(DailyLog).where(DailyLog.date==day.isoformat(),DailyLog.user_id=='personal'))
     if not log:
         previous=db.scalar(select(DailyLog).where(DailyLog.date<day.isoformat()).order_by(DailyLog.date.desc()))
-        log=DailyLog(id=str(uuid4()),date=day.isoformat(),weight_kg=previous.weight_kg if previous else 95.5,tdee=settings(db)['tdeeProfiles'].get('sedentary',2500))
+        s=settings(db)
+        log=DailyLog(id=str(uuid4()),date=day.isoformat(),weight_kg=previous.weight_kg if previous else 95.5,profile='automatic',tdee=s['tdeeProfiles']['sedentary'],expenditure_config=expenditure_config(s))
         db.add(log)
         try: db.commit()
         except IntegrityError:
             db.rollback()
             log=db.scalar(select(DailyLog).where(DailyLog.date==day.isoformat(),DailyLog.user_id=='personal'))
+    today=datetime.now(ZoneInfo(os.getenv('APP_TIMEZONE','Asia/Kolkata'))).date()
+    if day>=today and (not log.expenditure_config or log.expenditure_config.get('version')==1):
+        s=settings(db);log.expenditure_config=expenditure_config(s)
+        if log.profile!='custom':log.profile='automatic';log.tdee=s['tdeeProfiles']['sedentary']
+        db.commit()
     return log
 
 def normalized(db, log):
@@ -67,15 +76,19 @@ def read_log(day:date,db=Depends(session)): return log_data(db,get_log(db,day))
 def weight(day:date,body:Weight,db=Depends(session)):
     s=settings(db)
     if not s['weightMinKg']<=body.weightKg<=s['weightMaxKg']: raise HTTPException(422,'Weight outside configured range')
-    log=get_log(db,day); log.weight_kg=body.weightKg; db.commit()
+    log=get_log(db,day); log.weight_kg=body.weightKg
+    if not log.expenditure_config or log.expenditure_config.get('version')==1:
+        log.expenditure_config=expenditure_config(s)
+        if log.profile!='custom':log.profile='automatic';log.tdee=s['tdeeProfiles']['sedentary']
+    db.commit()
     return log_data(db,log)
 @app.put('/api/logs/{day}/tdee')
 def tdee(day:date,body:TDEE,db=Depends(session)):
     profiles=settings(db)['tdeeProfiles']
-    if body.profile not in profiles and body.profile!='custom': raise HTTPException(422,'Unknown TDEE profile')
-    value=body.kcal if body.kcal is not None else profiles.get(body.profile)
+    if body.profile not in profiles and body.profile not in ('custom','automatic'): raise HTTPException(422,'Unknown TDEE profile')
+    value=body.kcal if body.kcal is not None else profiles.get('sedentary' if body.profile=='automatic' else body.profile)
     if value is None: raise HTTPException(422,'Custom TDEE requires kcal')
-    log=get_log(db,day);log.profile=body.profile;log.tdee=value;db.commit()
+    log=get_log(db,day);log.profile=body.profile;log.tdee=value;log.expenditure_config=expenditure_config(settings(db));db.commit()
     return log_data(db,log)
 @app.get('/api/foods')
 def foods(favorite:bool|None=None,db=Depends(session)):
@@ -133,7 +146,12 @@ def remove_activity(day:date,id:str,db=Depends(session)):
 def read_settings(db=Depends(session)):return settings(db)
 @app.put('/api/settings')
 def put_settings(body:Settings,db=Depends(session)):
-    row=db.get(UserSettings,'personal');row.data=body.model_dump();db.commit();return row.data
+    row=db.get(UserSettings,'personal');row.data=body.model_dump()
+    today=datetime.now(ZoneInfo(os.getenv('APP_TIMEZONE','Asia/Kolkata'))).date().isoformat()
+    for log in db.scalars(select(DailyLog).where(DailyLog.date>=today)):
+        log.expenditure_config=expenditure_config(row.data)
+        if log.profile!='custom':log.tdee=row.data['tdeeProfiles'].get('sedentary' if log.profile=='automatic' else log.profile,log.tdee)
+    db.commit();return row.data
 @app.get('/api/logs/{day}/analysis')
 def stored_analysis(day:date,db=Depends(session)):
     log=get_log(db,day);current=snapshot_hash(normalized(db,log))

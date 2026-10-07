@@ -10,6 +10,7 @@ class Settings(StrictModel):
     deficitMinKcal: float = Field(default=800, ge=0)
     deficitMaxKcal: float = Field(default=1000, ge=0)
     walkingCoefficient: float = Field(default=0.5, gt=0, le=2)
+    tdeeReferenceWeightKg: float = Field(default=95.5, ge=20, le=350)
     weightMinKg: float = Field(default=20, gt=0)
     weightMaxKg: float = Field(default=350, gt=0)
     tdeeProfiles: dict[str, float] = Field(default_factory=lambda: {'sedentary':2500, 'high_walking':3000, 'gym_walking':3250})
@@ -17,7 +18,7 @@ class Settings(StrictModel):
     def ranges(self):
         if self.proteinMaxG < self.proteinMinG or self.deficitMaxKcal < self.deficitMinKcal or self.weightMaxKg <= self.weightMinKg:
             raise ValueError('Maximum must be greater than or equal to minimum')
-        if not self.tdeeProfiles or any(not 500 <= n <= 10000 for n in self.tdeeProfiles.values()):
+        if 'sedentary' not in self.tdeeProfiles or 'automatic' in self.tdeeProfiles or 'custom' in self.tdeeProfiles or any(not 500 <= n <= 10000 for n in self.tdeeProfiles.values()):
             raise ValueError('TDEE profiles must be between 500 and 10000 kcal')
         return self
 
@@ -64,6 +65,8 @@ class Activity(StrictModel):
             raise ValueError('Treadmill needs speed')
         if self.type in ('upper_body','pull','push','legs','abs') and not self.exerciseCount:
             raise ValueError('Workout needs exercise count')
+        if self.type in ('upper_body','pull','push','legs','abs') and not self.durationMinutes:
+            raise ValueError('Workout needs duration to estimate calories')
         if self.type=='manual' and self.caloriesEstimate is None:
             raise ValueError('Manual activity needs estimated calories')
         return self

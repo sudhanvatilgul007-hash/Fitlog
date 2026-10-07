@@ -42,6 +42,7 @@ type Food = {
 const fmt = (n: number) => Math.round(n).toLocaleString();
 const profileName = (s: string) =>
   ({
+    automatic: "Automatic · weight + logged activity",
     sedentary: "Sedentary",
     high_walking: "High walking",
     gym_walking: "Gym + high walking",
@@ -345,7 +346,11 @@ function App() {
                       value={fmt(total.selectedTDEE)}
                       unit="kcal"
                       icon={<Activity size={19} />}
-                      text={profileName(log.profile)}
+                      text={
+                        total.activityIncluded
+                          ? "Baseline + logged activity"
+                          : profileName(log.profile)
+                      }
                       color="purple"
                     />
                     <Metric
@@ -663,8 +668,9 @@ function App() {
                             />
                           ))}
                         <small className="formula">
-                          {settings.walkingCoefficient} × {log.weightKg} kg ×
-                          distance in km
+                          {log.expenditureConfig?.walkingCoefficient ??
+                            settings.walkingCoefficient}{" "}
+                          × {log.weightKg} kg × distance in km
                         </small>
                       </section>
                       <section className="card gym-card">
@@ -731,7 +737,7 @@ function App() {
                       <section className="card expenditure">
                         <h2>Daily expenditure</h2>
                         <label>
-                          Activity profile
+                          Expenditure mode
                           <select
                             value={log.profile}
                             onChange={(e) => {
@@ -746,10 +752,18 @@ function App() {
                                 });
                             }}
                           >
+                            <option value="automatic">
+                              Automatic · weight + logged activity
+                            </option>
                             {Object.entries(settings.tdeeProfiles).map(
                               ([k, v]) => (
                                 <option key={k} value={k}>
-                                  {profileName(k)} · {String(v)} kcal
+                                  {profileName(k)} ·{" "}
+                                  {fmt(
+                                    (Number(v) * log.weightKg) /
+                                      settings.tdeeReferenceWeightKg,
+                                  )}{" "}
+                                  kcal est.
                                 </option>
                               ),
                             )}
@@ -773,11 +787,57 @@ function App() {
                             />
                           </label>
                         )}
+                        <div className="burn">
+                          <span>
+                            {total.expenditureMethod === "weight_activity"
+                              ? "Weight-based baseline"
+                              : "Selected full-day estimate"}
+                          </span>
+                          <b>
+                            {fmt(total.baselineExpenditureKcal)}{" "}
+                            <small>kcal</small>
+                          </b>
+                        </div>
+                        <div className="burn">
+                          <span>
+                            Logged active calories
+                            {!total.activityIncluded ? " (informational)" : ""}
+                          </span>
+                          <b>
+                            {fmt(total.activityCaloriesEstimate)}{" "}
+                            <small>kcal</small>
+                          </b>
+                        </div>
+                        <div className="burn">
+                          <span>Total estimated expenditure</span>
+                          <b>
+                            {fmt(total.totalExpenditureKcal)}{" "}
+                            <small>kcal</small>
+                          </b>
+                        </div>
+                        {total.expenditureMethod !== "fixed" && (
+                          <p>
+                            {fmt(total.referenceTDEEKcal)} kcal × {log.weightKg}{" "}
+                            kg / {total.referenceWeightKg} kg
+                            {total.activityIncluded
+                              ? " + logged active calories"
+                              : ""}
+                            . This is a calibrated weight-based estimate.
+                          </p>
+                        )}
                         <p>
                           <Check size={15} />
-                          Activity is included in your selected TDEE. Burn
-                          estimates aren’t added again.
+                          {total.activityIncluded
+                            ? "Logged activity is added once. Gym estimates exclude resting calories already in the baseline."
+                            : "This full-day estimate includes activity. Logged burn is not added again."}
                         </p>
+                        {total.expenditureEstimateIncomplete && (
+                          <p className="stale">
+                            Some workouts are missing duration and are excluded
+                            from exercise calories. Edit them to complete your
+                            estimate.
+                          </p>
+                        )}
                       </section>
                     </div>
                   </div>
@@ -955,6 +1015,7 @@ function App() {
                     "deficitMinKcal",
                     "deficitMaxKcal",
                     "walkingCoefficient",
+                    "tdeeReferenceWeightKg",
                     "weightMinKg",
                     "weightMaxKg",
                   ])
@@ -972,6 +1033,7 @@ function App() {
                     ["deficitMinKcal", "Deficit minimum (kcal)"],
                     ["deficitMaxKcal", "Deficit maximum (kcal)"],
                     ["walkingCoefficient", "Walking coefficient"],
+                    ["tdeeReferenceWeightKg", "TDEE calibration weight (kg)"],
                     ["weightMinKg", "Minimum weight (kg)"],
                     ["weightMaxKg", "Maximum weight (kg)"],
                   ].map(([k, l]) => (
@@ -988,7 +1050,7 @@ function App() {
                   ))}
                   {Object.keys(settings.tdeeProfiles).map((k) => (
                     <label key={k}>
-                      {profileName(k)} TDEE (kcal)
+                      {profileName(k)} at calibration weight (kcal)
                       <input
                         name={"profile_" + k}
                         type="number"
@@ -1602,7 +1664,10 @@ function ActivityForm({
       }}
     >
       <h2>{activity?.id ? "Edit activity" : "Add activity"}</h2>
-      <p>Exercise estimates are informational and never added to your TDEE.</p>
+      <p>
+        Automatic mode adds active calories to the weight-based baseline.
+        Full-day profiles and custom overrides exclude extra activity calories.
+      </p>
       <label>
         Activity
         <select value={type} onChange={(e) => setType(e.target.value)}>
@@ -1650,10 +1715,10 @@ function ActivityForm({
       {type !== "manual" && (
         <label>
           Duration (minutes
-          {!["cycling", "treadmill"].includes(type) ? ", optional" : ""})
+          {type === "walking" ? ", optional" : ""})
           <input
             name="durationMinutes"
-            required={["cycling", "treadmill"].includes(type)}
+            required={type !== "walking"}
             type="number"
             min="0.1"
             step="any"
@@ -1689,7 +1754,7 @@ function ActivityForm({
       )}
       {type === "manual" && (
         <label>
-          Imported/manual burn estimate (kcal)
+          Manual active calories above rest (kcal)
           <input
             name="caloriesEstimate"
             required

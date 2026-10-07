@@ -26,6 +26,7 @@ class DailyLog(Base):
     weight_kg: Mapped[float] = mapped_column(Float)
     profile: Mapped[str] = mapped_column(String, default='sedentary')
     tdee: Mapped[float] = mapped_column(Float, default=2500)
+    expenditure_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 

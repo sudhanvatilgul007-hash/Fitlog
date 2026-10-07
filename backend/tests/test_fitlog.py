@@ -147,3 +147,61 @@ def test_custom_food_and_settings_do_not_call_provider(setup):
     assert c.delete('/api/foods/'+f['id']).status_code==200
     assert c.get(DAY).json()['food'][0]['displayName']=='Test food'
     assert p.calls==0
+
+def test_automatic_tdee_tracks_weight_and_logged_expenditure(setup):
+    c,p,_=setup
+    initial=c.get(DAY).json()
+    assert initial['profile']=='automatic'
+    assert initial['calculated']['totalExpenditureKcal']==2500
+    assert c.put(DAY+'/weight',json={'weightKg':90}).json()['calculated']['selectedTDEE']==2356.02
+    log=c.post(DAY+'/activities',json={'type':'walking','distanceKm':8}).json()
+    assert log['calculated']['walkingCaloriesEstimate']==360
+    assert log['calculated']['totalExpenditureKcal']==2716.02
+    log=c.post(DAY+'/activities',json={'type':'cycling','durationMinutes':10}).json()
+    assert log['calculated']['exerciseCaloriesEstimate']==78.75
+    assert log['calculated']['totalExpenditureKcal']==2794.77
+    log=c.post(DAY+'/foods',json={'foodPresetId':'whey','quantity':1,'unit':'scoop'}).json()
+    assert log['calculated']['deficitKcal']==2654.77
+    aid=next(a['id'] for a in log['activity'] if a['type']=='walking')
+    log=c.patch(DAY+'/activities/'+aid,json={'type':'walking','distanceKm':10}).json()
+    assert log['calculated']['totalExpenditureKcal']==2884.77
+    assert c.delete(DAY+'/activities/'+aid).json()['calculated']['totalExpenditureKcal']==2434.77
+    assert p.calls==0
+
+def test_full_day_profiles_and_overrides_do_not_double_count(setup):
+    c,p,_=setup
+    c.put(DAY+'/weight',json={'weightKg':95.5})
+    c.post(DAY+'/activities',json={'type':'walking','distanceKm':8.16})
+    log=c.put(DAY+'/tdee',json={'profile':'gym_walking'}).json()
+    assert log['calculated']['selectedTDEE']==3250
+    assert not log['calculated']['activityIncluded']
+    log=c.put(DAY+'/weight',json={'weightKg':90}).json()
+    assert log['calculated']['selectedTDEE']==3062.83
+    c.put(DAY+'/tdee',json={'profile':'custom','kcal':2800})
+    assert c.put(DAY+'/weight',json={'weightKg':85}).json()['calculated']['selectedTDEE']==2800
+    assert p.calls==0
+
+def test_past_expenditure_calibration_is_preserved_when_settings_change(setup):
+    c,p,session=setup
+    old='/api/logs/2020-01-01'
+    c.post(old+'/activities',json={'type':'walking','distanceKm':8})
+    before=c.get(old).json()['calculated']
+    s=c.get('/api/settings').json();s['walkingCoefficient']=.7;s['tdeeReferenceWeightKg']=100;s['tdeeProfiles']['sedentary']=2700
+    assert c.put('/api/settings',json=s).status_code==200
+    assert c.get(old).json()['calculated']==before
+    from app.models import DailyLog
+    with session() as db:
+        row=db.scalar(select(DailyLog).where(DailyLog.date=='2020-01-01'))
+        row.profile='gym_walking';row.tdee=3250;row.expenditure_config={'version':1,'walkingCoefficient':.5};db.commit()
+    assert c.get(old).json()['calculated']['selectedTDEE']==3250
+    assert c.put(old+'/weight',json={'weightKg':90}).json()['calculated']['expenditureMethod']=='weight_activity'
+    assert p.calls==0
+
+def test_workout_calories_require_duration_and_use_net_met(setup):
+    c,p,_=setup
+    assert c.post(DAY+'/activities',json={'type':'legs','exerciseCount':6}).status_code==422
+    log=c.post(DAY+'/activities',json={'type':'legs','exerciseCount':6,'durationMinutes':30}).json()
+    assert log['calculated']['exerciseCaloriesEstimate']==125.34
+    assert log['calculated']['totalExpenditureKcal']==2625.34
+    assert not log['calculated']['expenditureEstimateIncomplete']
+    assert p.calls==0
