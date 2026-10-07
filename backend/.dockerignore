@@ -1,4 +1,7 @@
+.env
+.env.*
+*.db
+*.db-*
 __pycache__
 .pytest_cache
-*.db
-.env
+.venv

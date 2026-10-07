@@ -1,18 +1,16 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-
-# Load only the backend's local file; deployed environment variables win.
-load_dotenv(Path(__file__).resolve().parent.parent / '.env', override=False)
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from .database_config import database_url, is_railway
 
-url = os.getenv('DATABASE_URL', 'sqlite:///./fitlog.db')
-if url.startswith('postgres://'):
-    url = url.replace('postgres://', 'postgresql+psycopg://', 1)
-elif url.startswith('postgresql://'):
-    url = url.replace('postgresql://', 'postgresql+psycopg://', 1)
-engine = create_engine(url, connect_args={'check_same_thread': False} if url.startswith('sqlite') else {})
+backend_dir = Path(__file__).resolve().parent.parent
+# Local credentials must never override or supplement Railway configuration.
+if not is_railway(os.environ):
+    load_dotenv(backend_dir / '.env', override=False)
+url = database_url(os.environ, backend_dir)
+engine = create_engine(url, connect_args={'check_same_thread': False} if url.get_backend_name() == 'sqlite' else {})
 Session = sessionmaker(engine, expire_on_commit=False)
 class Base(DeclarativeBase):
     pass

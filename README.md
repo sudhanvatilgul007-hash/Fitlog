@@ -36,7 +36,7 @@ cd backend
 ../.venv/bin/uvicorn app.main:app --env-file .env --host 127.0.0.1 --port 8000
 ```
 
-The backend automatically loads `backend/.env`; existing shell/Railway variables take precedence. Restart the backend after editing the file. The local example uses SQLite; Docker Compose uses its PostgreSQL service.
+The backend loads `backend/.env` only locally; existing shell variables take precedence. Railway uses service variables only. Relative SQLite paths resolve against the backend directory, regardless of the working directory. Restart the backend after editing the file. The local example uses SQLite; Docker Compose uses its PostgreSQL service.
 
 `gpt-4.1-nano` is the cheapest GPT-4.1 variant and supports structured output. OpenAI schedules its retirement for October 23, 2026; choose another supported model via `LLM_MODEL` before then. See [official model details](https://developers.openai.com/api/docs/models/gpt-4.1-nano) and [deprecations](https://developers.openai.com/api/docs/deprecations).
 
@@ -109,7 +109,7 @@ The container runs migrations and seeds before serving. Docker Compose persists 
 
 1. Push the repository to your own Git repository. Create a Railway project with a PostgreSQL service and a service from this repository.
 2. Leave the service Root Directory empty (repository root `/`) and use `/railway.json`. The root Dockerfile builds React with Node 24, then copies its static output and the Python backend into one runtime image. Railway should log `Using detected Dockerfile!` instead of attempting Railpack language detection. Clear any old `/backend` Root Directory, custom build/start command, or backend config-file path; if `RAILWAY_DOCKERFILE_PATH` is set, clear it or set it to `Dockerfile`. Building only `/backend` will not include the frontend.
-3. Set `DATABASE_URL` to Railway’s PostgreSQL URL. Plain `postgresql://` and `postgres://` URLs are converted to the psycopg driver.
+3. Use `backend/.env.railway.example` for production settings, not your local `.env`. Set `DATABASE_URL` to Railway’s PostgreSQL URL, or attach a persistent volume at `/data` and set `DATABASE_URL=sqlite:////data/fitlog.db`. Railway SQLite startup requires the database to be inside the attached volume; a Mac `/Users/...` path will fail. SQLite parent directories are created before migrations. Plain `postgresql://` and `postgres://` URLs are converted to the psycopg driver.
 4. Set `LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_KEY`, `APP_ENV=production`, `APP_TIMEZONE=Asia/Kolkata`, `FRONTEND_URL` and `CORS_ORIGINS` to your Railway public origin, for example `https://fitlog-production-057f.up.railway.app`. Keep secrets in Railway variables. The Dockerfile sets `FRONTEND_DIST=/app/static`; do not override it to another directory.
 5. Deploy. Startup runs `alembic upgrade head`, then `python -m app.seed`, then uvicorn on Railway’s `PORT`. Use one migration runner during initial deployment; coordinate migrations separately before scaling replicas.
 6. Open your Railway domain at `/` for the fitlog UI. `/api/health` returns JSON, `/docs` shows API documentation, and `/assets/*` serves the frontend bundles. The frontend calls `/api` on the same origin, so no frontend proxy or separate deployment is needed. Verify logging before enabling paid analysis. Enable PostgreSQL backups.
@@ -141,7 +141,7 @@ The server needs `LLM_API_KEY` in the Railway **Fitlog service** variables; miss
 
 Failures distinguish missing/invalid keys, exhausted quota, rate limits, inaccessible models, request rejection, timeouts, refusal, truncation and invalid structured output. Server logs include a safe category, upstream HTTP status and request ID when available; they omit provider response bodies, API keys and journal contents. There are no automatic retries or fallback provider calls. After correcting the cause, use the explicit Retry action.
 
-**Preserve data before changing configuration or redeploying.** Without `DATABASE_URL`, the backend uses `/app/fitlog.db` in the runtime container. Railway's ephemeral filesystem does not persist across deployments. Back up the running database first, then configure PostgreSQL or a persistent volume mounted at `/data` with `DATABASE_URL=sqlite:////data/fitlog.db`, transferring existing data before switching. Merely attaching a volume does not copy the old database. See [Railway storage documentation](https://docs.railway.com/services#ephemeral-storage).
+**Preserve data before changing configuration or redeploying.** Older deployments without `DATABASE_URL` used `/app/fitlog.db` in the runtime container. New Railway deployments require PostgreSQL or an attached SQLite volume; they refuse to start with ephemeral SQLite storage. Railway's ephemeral filesystem does not persist across deployments. Back up the running database first, then configure PostgreSQL or a persistent volume mounted at `/data` with `DATABASE_URL=sqlite:////data/fitlog.db`, transferring existing data before switching. Merely attaching a volume does not copy the old database. See [Railway storage documentation](https://docs.railway.com/services#ephemeral-storage).
 
 ## Accounts and existing data
 
