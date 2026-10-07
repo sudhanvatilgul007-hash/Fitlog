@@ -101,11 +101,13 @@ The container runs migrations and seeds before serving. Docker Compose persists 
 ## Deploy backend on Railway
 
 1. Push the repository to your own Git repository. Create a Railway project with a PostgreSQL service and a service from this repository.
-2. Set the backend service root directory to `/backend`. The included Dockerfile and `railway.json` use that root.
+2. Leave the backend service Root Directory empty (repository root `/`) and use the root `/railway.json` configuration. The root Dockerfile copies the backend into the image and installs locked Python dependencies. Railway should log `Using detected Dockerfile!` instead of attempting Railpack language detection. If you previously set a custom config-file path or `RAILWAY_DOCKERFILE_PATH`, clear it or point it to the root file. An alternative is Root Directory `/backend` with Config File `/backend/railway.json`; keep these settings paired because Railway does not automatically relocate the config file with the Root Directory.
 3. Set `DATABASE_URL` to Railway’s PostgreSQL URL. Plain `postgresql://` and `postgres://` URLs are converted to the psycopg driver.
 4. Set `LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_KEY`, `APP_ENV=production`, `APP_TIMEZONE=Asia/Kolkata`, `FRONTEND_URL` and `CORS_ORIGINS` to your actual frontend origin. Keep secrets in Railway variables.
 5. Deploy. Startup runs `alembic upgrade head`, then `python -m app.seed`, then uvicorn on Railway’s `PORT`. Use one migration runner during initial deployment; coordinate migrations separately before scaling replicas.
 6. Verify `/api/health` and logging before enabling paid analysis. Enable PostgreSQL backups.
+
+If deployment fails with `Railpack could not determine how to build the app` and lists both `backend/` and `frontend/`, Railway is inspecting the repository root. Redeploy the latest commit with the root Dockerfile/config above. There is no need for a `start.sh`. This Railway service runs the API; deploy the frontend separately to Netlify as described below.
 
 ## Deploy frontend on Netlify
 
