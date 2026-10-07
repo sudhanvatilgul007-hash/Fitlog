@@ -18,7 +18,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://fitlog:fitlog@db:5432/fitlog
       LLM_PROVIDER: ${LLM_PROVIDER:-openai}
-      LLM_MODEL: ${LLM_MODEL:-gpt-4.1-mini}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4.1-nano}
       LLM_API_KEY: ${LLM_API_KEY:-}
       CORS_ORIGINS: http://localhost:5173
     ports:

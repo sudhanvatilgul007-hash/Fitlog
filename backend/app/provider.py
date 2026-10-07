@@ -43,7 +43,7 @@ class OpenAICompatibleProvider:
     def __init__(self):
         # Resolve settings when a request starts, rather than caching at import time.
         self.name=os.getenv('LLM_PROVIDER','openai').strip()
-        self.model=os.getenv('LLM_MODEL','gpt-4.1-mini').strip()
+        self.model=os.getenv('LLM_MODEL','gpt-4.1-nano').strip()
         self.base_url=os.getenv('LLM_BASE_URL','https://api.openai.com/v1').strip().rstrip('/')
 
     def validate_config(self):
