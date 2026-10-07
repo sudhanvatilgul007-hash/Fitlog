@@ -179,3 +179,7 @@ def history(from_:date|None=Query(None,alias='from'),to:date|None=None,db=Depend
     last7=[d for d in days if d['date']>=(end-timedelta(days=6)).isoformat()]
     last30=[d for d in days if d['date']>=(end-timedelta(days=29)).isoformat()]
     return {'days':days,'averages':averages(days),'sevenDay':averages(last7),'thirtyDay':averages(last30),'proteinAdherence':{'meeting':sum(d['totalProteinG']>=settings(db)['proteinMinG'] for d in days),'total':len(days)}}
+
+# Keep this last so API/documentation routes take priority over static files.
+from .frontend import mount_frontend
+mount_frontend(app)

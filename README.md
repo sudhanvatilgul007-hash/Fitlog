@@ -51,6 +51,7 @@ Configuration:
 | `CORS_ORIGINS` | Comma-separated allowed frontend origins |
 | `APP_ENV`, `FRONTEND_URL` | Deployment metadata |
 | `API_PROXY_TARGET` | Optional development backend proxy destination |
+| `FRONTEND_DIST` | Optional path to a built frontend; set to `/app/static` in the combined Railway image |
 
 The provider issues one HTTP request with strict schema output and no automatic retry. Format follows [OpenAI structured-output documentation](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=chat). Its default model can be changed with the environment; compatible providers must support the same Chat Completions JSON-schema contract.
 
@@ -98,18 +99,29 @@ npm run dev
 
 The container runs migrations and seeds before serving. Docker Compose persists PostgreSQL in `fitlog-data`.
 
-## Deploy backend on Railway
+## Deploy frontend and backend together on Railway
 
 1. Push the repository to your own Git repository. Create a Railway project with a PostgreSQL service and a service from this repository.
-2. Leave the backend service Root Directory empty (repository root `/`) and use the root `/railway.json` configuration. The root Dockerfile copies the backend into the image and installs locked Python dependencies. Railway should log `Using detected Dockerfile!` instead of attempting Railpack language detection. If you previously set a custom config-file path or `RAILWAY_DOCKERFILE_PATH`, clear it or point it to the root file. An alternative is Root Directory `/backend` with Config File `/backend/railway.json`; keep these settings paired because Railway does not automatically relocate the config file with the Root Directory.
+2. Leave the service Root Directory empty (repository root `/`) and use `/railway.json`. The root Dockerfile builds React with Node 24, then copies its static output and the Python backend into one runtime image. Railway should log `Using detected Dockerfile!` instead of attempting Railpack language detection. Clear any old `/backend` Root Directory, custom build/start command, or backend config-file path; if `RAILWAY_DOCKERFILE_PATH` is set, clear it or set it to `Dockerfile`. Building only `/backend` will not include the frontend.
 3. Set `DATABASE_URL` to Railway’s PostgreSQL URL. Plain `postgresql://` and `postgres://` URLs are converted to the psycopg driver.
-4. Set `LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_KEY`, `APP_ENV=production`, `APP_TIMEZONE=Asia/Kolkata`, `FRONTEND_URL` and `CORS_ORIGINS` to your actual frontend origin. Keep secrets in Railway variables.
+4. Set `LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_KEY`, `APP_ENV=production`, `APP_TIMEZONE=Asia/Kolkata`, `FRONTEND_URL` and `CORS_ORIGINS` to your Railway public origin, for example `https://fitlog-production-057f.up.railway.app`. Keep secrets in Railway variables. The Dockerfile sets `FRONTEND_DIST=/app/static`; do not override it to another directory.
 5. Deploy. Startup runs `alembic upgrade head`, then `python -m app.seed`, then uvicorn on Railway’s `PORT`. Use one migration runner during initial deployment; coordinate migrations separately before scaling replicas.
-6. Verify `/api/health` and logging before enabling paid analysis. Enable PostgreSQL backups.
+6. Open your Railway domain at `/` for the fitlog UI. `/api/health` returns JSON, `/docs` shows API documentation, and `/assets/*` serves the frontend bundles. The frontend calls `/api` on the same origin, so no frontend proxy or separate deployment is needed. Verify logging before enabling paid analysis. Enable PostgreSQL backups.
 
-If deployment fails with `Railpack could not determine how to build the app` and lists both `backend/` and `frontend/`, Railway is inspecting the repository root. Redeploy the latest commit with the root Dockerfile/config above. There is no need for a `start.sh`. This Railway service runs the API; deploy the frontend separately to Netlify as described below.
+If deployment fails with `Railpack could not determine how to build the app` and lists both `backend/` and `frontend/`, redeploy the latest commit with the root Dockerfile/config above. There is no need for a `start.sh`. If `/` returns JSON `Not Found`, check that the latest combined-build commit was deployed from repository root, rather than the backend-only Dockerfile.
 
-## Deploy frontend on Netlify
+To verify the combined serving locally after `npm run build`:
+
+```sh
+cd backend
+FRONTEND_DIST="$PWD/../frontend/dist" ../.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+Visit http://127.0.0.1:8000 for the UI and http://127.0.0.1:8000/api/health for the API. If Docker is available, `docker build -t fitlog .` from repository root exercises the same multi-stage build used on Railway.
+
+## Optional separate frontend deployment on Netlify
+
+The combined Railway deployment above does not need Netlify. Use this section only if you deliberately want separate frontend hosting.
 
 1. Replace `YOUR-FITLOG-BACKEND` in root `netlify.toml` with the real Railway backend hostname.
 2. Import the repository into Netlify. Base directory `frontend`, publish directory `dist`, build `npm ci && npm run build`. Set `NODE_VERSION=24`.
